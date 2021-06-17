@@ -187,7 +187,7 @@ P_rec <- recall(sentiment_scoretable, "Positive")
 P_F1 <- F1(P_pre, P_rec)
 
 # Calculate macro F1
-MAF1 <- mean(c(N_F1, Neu_F1, N_F1)) %>% round(2)
+MAF1 <- mean(c(N_F1, Neu_F1, P_F1)) %>% round(2)
 
 values <- list("Acc" = acc, "MAF1" = MAF1,
                "Neg_Precision" = N_pre, "Neg_Recall" = N_rec, "Neg_F1" = N_F1,

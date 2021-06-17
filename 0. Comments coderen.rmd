@@ -1,0 +1,95 @@
+---
+title: "Comments codering"
+author: "Shy-Ann Moehamatdjalil"
+date: "14-5-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/Comments/comment_overview.xlsx , Data/Comments/Kopie van Twijfelgevallen_LB.xlsx, 
+#             Data/Comments/Twijfelgevallen Combined AANGEPAST.xlsx
+
+# CREATES: Data/Comments/Twijfelgevallen.xlsx, Data/Comments/Twijfelgevallen Combined.xlsx, Data/comment_overview_V1.xlsx
+#          Data/Extra analyse/comment_overview_ZT.xlsx
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+```
+
+## Load Data
+```{r message=FALSE}
+# Load in the data
+comment_overview <- read_excel("./Data/Comments/comment_overview.xlsx", col_types = "text") %>% 
+  mutate(across(!c("user_name","comment","ma_sentiment", 'twijfel',
+                   "replies","id"), as.numeric))
+
+comment_overview %>% head()
+```
+
+## Make seperate file with the comments that are twijfelgevallen
+
+Next, select the comments that have the NegCon or PosCon sentiment and the ones that are a debatble case in which that column also has a value. Write that dataframe to an Excel file
+
+```{r}
+comments_rand <- comment_overview %>% 
+  filter(ma_sentiment %in% c("NegCon", "PosCon") | !is.na(twijfel)) 
+
+comments_rand %>% 
+  write_xlsx("./Data/Comments/Twijfelgevallen.xlsx")
+```
+
+
+## Combine file with annotated comments of second annator
+
+File of myself with debatable comments combined with Laura's annotated. Compared to each other and adjusted in Excel
+```{r}
+# Load file from R
+comments_LB <- read_excel("./Data/Comments/Kopie van Twijfelgevallen_LB.xlsx")
+
+# Combine the two documents and write to excel
+comments_LB %>% 
+  select(sk_id, ma_sentiment_LB, `Toelichting Laura`) %>% 
+  merge(comments_rand, by = 'sk_id') %>% 
+  write_xlsx("./Data/Comments/Twijfelgevallen Combined.xlsx")
+```
+
+Next, combine the new file with adjusted comments to the original document
+
+```{r}
+# Load file back in from Excel
+comments_combined <- read_excel("./Data/Comments/Twijfelgevallen Combined AANGEPAST.xlsx")
+
+# Add the columns from the data frame to original so that the columns are the same for both dataframes 
+comment_overview_V1 <- comment_overview %>% 
+  add_column(context = 'Sentiment', .after = "twijfel") %>% 
+  add_column(ma_sentiment_LB = 'Sentiment', .after = "context") %>% 
+  add_column(`Toelichting Laura` = 'Sentiment')
+
+# Add the rows from the file with the combined sentiment categories
+comment_overview_V1 [comment_overview_V1$sk_id %in% comments_combined$sk_id,] <- comments_combined
+
+# Check if everything worked and write to excel
+comment_overview_V1 %>% head()
+comments_overview_FI <- comment_overview_V1 %>% 
+   select(-c(twijfel, context, ma_sentiment_LB,`Toelichting Laura`))
+
+# Final dataframe
+comments_overview_FI %>% 
+    write_xlsx("./Data/comment_overview_V1.xlsx")
+```
+
+#### EXTRA ANALYSIS ###
+
+## Make a dataframe without the debatable comments
+```{r}
+comment_overview_ZT <- comment_overview[!comment_overview$sk_id %in% comments_rand$sk_id,] #2582, 254 comments excluded
+
+# Write to excel
+comment_overview_ZT %>% 
+  write_xlsx("./Data/Extra analyse/comment_overview_ZT.xlsx")
+```
+

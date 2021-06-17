@@ -1,0 +1,247 @@
+---
+title: "9. Wordlist comparison"
+author: "Shy-Ann Moehamatdjalil"
+date: "2-6-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/NRC/NRC_Dutch.xlsx, Dictionaries/DANEW_Rescored.xlsx, Dictionaries/polyglot.csv
+
+# CREATES: Dictionaries/Pattern Wordlist.xlsx, Data/Extra analyse/Opposite woorden.xlsx
+
+### Load packages
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+library(XML)
+library(xml2)
+library(methods)
+library(hablar)
+library(rvest)
+library(magrittr)
+```
+
+### Compare the amount of words per category
+
+NRC
+```{r}
+NRC_list <- read_xlsx("./Data/NRC/NRC_Dutch.xlsx")
+
+NRC_list <- NRC_list %>% 
+  mutate(sentiment = case_when(
+    Positive > Negative ~ 'Positive',
+    Negative > Positive ~ 'Negative',
+    TRUE ~ 'Neutral'
+  ))
+
+table(NRC_list$sentiment)
+nrow(NRC_list)
+```
+
+DANEW
+```{r}
+DANEW_list <- read_xlsx("./Dictionaries/DANEW_Rescored.xlsx")
+
+DANEW_list <- DANEW_list %>% 
+  mutate(sentiment = case_when(
+    Positive > Negative ~ 'Positive',
+    Negative > Positive ~ 'Negative',
+    TRUE ~ 'Neutral'
+  ))
+
+table(DANEW_list$sentiment)
+nrow(DANEW_list)
+```
+
+
+Pattern
+```{r}
+# Url to download the XML file from
+url <- "https://raw.githubusercontent.com/clips/pattern/master/pattern/text/nl/nl-sentiment.xml"
+
+# Read XML file 
+doc <- read_xml(url)
+rows <- doc %>% 
+  html_elements("word")
+
+# Turn into dataframe
+pattern_wordlist <- data.frame(
+  word = rows %>% xml_attr("form"),
+  polarity = rows %>% xml_attr("polarity"),
+  subjectivty = rows %>% xml_attr("subjectivty"),
+  intensity = rows %>% xml_attr("intensity"),
+  confidence = rows %>% xml_attr("confidence"),
+  cornetto_id = rows %>% xml_attr("cornetto_id"),
+  cornett_synset_id = rows %>% xml_attr("cornett_synset_id"),
+  wordnet_id = rows %>% xml_attr("wordnet_id"),
+  pos = rows %>% xml_attr("pos"),
+  sense = rows %>% xml_attr("sense")
+)
+
+# Select only the word and polarity score and make sentiment variable
+pattern_wordlist <- pattern_wordlist %>% 
+  select(word, polarity) %>% 
+  convert(chr(word),
+          num(polarity)) %>% 
+  mutate(sentiment = case_when(
+    polarity > 0 ~ 'Positive',
+    polarity < 0 ~ 'Negative',
+    TRUE ~ 'Neutral'
+  ))
+
+pattern_wordlist %>% head(20)
+
+table(pattern_wordlist$sentiment)
+nrow(pattern_wordlist)
+
+# Save as excel file
+pattern_wordlist %>% 
+  write_xlsx("./Dictionaries/Pattern Wordlist.xlsx")
+```
+
+Polyglot 
+```{r message=FALSE}
+polyglot_list <- read_csv("./Dictionaries/polyglot.csv") %>% 
+  mutate(polarity = case_when(
+    sentiment == "[-1]" ~ -1,
+    sentiment == "[1]" ~ 1,
+    TRUE ~0
+  )) %>% 
+  select(-sentiment) %>% 
+  mutate(sentiment_poly = case_when(
+    polarity == -1 ~ "Negative",
+    polarity == 1 ~ "Positive",
+    TRUE ~ "Neutral"
+  ))
+
+table(polyglot_list$polarity)
+nrow(polyglot_list)
+```
+
+### Compare them together
+```{r}
+# Polyglot vs. the rest
+poly_pattern <- polyglot_list %>% 
+  full_join(pattern_wordlist, by = c("words" = 'word')) %>% 
+  arrange(words)
+poly_DANEW <- polyglot_list %>% 
+  full_join(DANEW_list, by = c("words" = 'Words')) %>% 
+  arrange(words)
+poly_NRC <- polyglot_list %>% 
+  full_join(NRC_list, by = c("words" = 'Dutch')) %>% 
+  arrange(words)
+
+# Pattern vs. the rest
+pattern_DANEW <- pattern_wordlist %>% 
+  full_join(DANEW_list, by = c('word' = 'Words')) %>% 
+  arrange(word)
+pattern_NRC <- pattern_wordlist %>% 
+  full_join(NRC_list, by = c('word' = 'Dutch')) %>% 
+  arrange(word)
+
+# NRC & DANEW
+NRC_DANEW <- NRC_list %>% 
+  full_join(DANEW_list, by = c("Dutch" = "Words")) %>% 
+  arrange(Dutch)
+```
+
+```{r}
+# Make tables
+
+# POLYGLOT VS PATTERN
+table(poly_pattern$sentiment_poly, poly_pattern$sentiment,
+      useNA = "always", dnn = c("Polyglot", "Pattern"))
+# Proptable
+table(poly_pattern$sentiment_poly, poly_pattern$sentiment,
+      useNA = "always", dnn = c("Polyglot", "Pattern")) %>% 
+  prop.table() %>%  round(2)
+# (7 + 7= ) 14% overeenstemming van categorieen, (7 + 1 +1 + 1 +1 +7=) 18% overeenstemming woorden
+
+# POLYGLOT VS DANEW
+table(poly_DANEW$sentiment_poly, poly_DANEW$sentiment,
+      useNA = "always", dnn = c("Polyglot", "DANEW"))
+# Proptable
+table(poly_DANEW$sentiment_poly, poly_DANEW$sentiment,
+      useNA = "always", dnn = c("Polyglot", "DANEW")) %>% 
+  prop.table() %>%  round(2)
+#(8 + 5=) 13% overeenstemming categorieen, (8 + 2 + 1 + 0 + 1 + 5=) 17% overeenstemming woorden
+
+# POLYGLOT VS NRC
+table(poly_NRC$sentiment_poly, poly_NRC$sentiment,
+      useNA = "always", dnn = c("Polyglot", "NRC"))
+# Prop table
+table(poly_NRC$sentiment_poly, poly_NRC$sentiment,
+      useNA = "always", dnn = c("Polyglot", "NRC")) %>% 
+  prop.table() %>%  round(2)
+#( 7 + 4=) 11% overeenstemming categorieen, (7 + 3 + 0 + 0 + 2 + 4=) 16% overeenstemming woorden
+
+# PATTERN VS DANEW
+table(pattern_DANEW$sentiment.x, pattern_DANEW$sentiment.y,
+      useNA = "always", dnn = c("Pattern", "DANEW"))
+# Prop table
+table(pattern_DANEW$sentiment.x, pattern_DANEW$sentiment.y,
+      useNA = "always", dnn = c("Pattern", "DANEW"))%>% 
+  prop.table() %>%  round(2) 
+
+# PATTERN VS NRC
+table(pattern_NRC$sentiment.x, pattern_NRC$sentiment.y,
+      useNA = "always", dnn = c("Pattern", "NRC"))
+# Prop table
+table(pattern_NRC$sentiment.x, pattern_NRC$sentiment.y,
+      useNA = "always", dnn = c("Pattern", "NRC"))%>% 
+  prop.table() %>%  round(2)
+
+# NRC VS DANEW
+table(NRC_DANEW$sentiment.x, NRC_DANEW$sentiment.y,
+      useNA = "always", dnn = c("NRC", "DANEW"))
+# Prop table
+table(NRC_DANEW$sentiment.x, NRC_DANEW$sentiment.y,
+      useNA = "always", dnn = c("NRC", "DANEW"))%>% 
+  prop.table() %>%  round(2)
+```
+
+
+```{r}
+#Look at words that are categorized as the opposite class
+opposite_poly_pattern <- poly_pattern %>% 
+  filter((sentiment_poly == "Negative" & sentiment == "Positive") |
+          (sentiment_poly == "Positive" & sentiment == "Negative")) %>% 
+  select(words)
+
+opposite_poly_DANEW <- poly_DANEW %>% 
+  filter((sentiment_poly == "Negative" & sentiment == "Positive") |
+          (sentiment_poly == "Positive" & sentiment == "Negative")) %>% 
+  select(words)
+
+opposite_poly_NRC <- poly_NRC %>% 
+  filter((sentiment_poly == "Negative" & sentiment == "Positive") |
+          (sentiment_poly == "Positive" & sentiment == "Negative")) %>% 
+  select(words)
+
+opposite_NRC_DANEW <- NRC_DANEW %>% 
+  filter((sentiment.x == "Negative" & sentiment.y == "Positive") |
+          (sentiment.x == "Positive" & sentiment.y == "Negative")) %>% 
+  select(Dutch) %>% 
+  rename("words" = "Dutch")
+
+opposite_pattern_DANEW <-pattern_DANEW %>% 
+  filter((sentiment.x == "Negative" & sentiment.y == "Positive") |
+          (sentiment.x == "Positive" & sentiment.y == "Negative")) %>% 
+  select(word) %>% 
+  rename("words" = "word")
+
+opposite_pattern_NRC <- pattern_NRC %>% 
+  filter((sentiment.x == "Negative" & sentiment.y == "Positive") |
+          (sentiment.x == "Positive" & sentiment.y == "Negative")) %>% 
+  select(word)%>% 
+  rename("words" = "word")
+
+bind_rows(opposite_poly_pattern, opposite_poly_DANEW, opposite_poly_NRC,
+      opposite_NRC_DANEW, opposite_pattern_DANEW, opposite_pattern_NRC) %>% 
+  distinct(words) %>% 
+  sample_n(150) %>% 
+  write_xlsx("./Data/Extra analyse/Opposite woorden.xlsx")
+```
+

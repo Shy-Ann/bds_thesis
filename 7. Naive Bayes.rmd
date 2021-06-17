@@ -1,0 +1,274 @@
+---
+title: "7. Naive Bayes"
+author: "Shy-Ann Moehamatdjalil"
+date: "27-5-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/comment_overview_CLEAN.xlsx, Data/Extra analyse/comment_overview_CLEAN_ZT.xlsx
+
+# CREATES: Data/nb_dataset.csv, Data/Prediction files/6. Bayes Prediction.xlsx, 
+#          Data/Extra analyse/Prediction files/6. Naive Bayes Prediction_ZT.xlsx
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+library(caret)
+library(e1071)
+library(tm)
+```
+
+## Load Data
+```{r}
+# Load in the data
+comment_overview_V1 <- read_excel("./Data/comment_overview_CLEAN.xlsx", col_types = "text") 
+
+# Make ma_sentiment a factor variable
+comment_overview_V1$ma_sentiment <- as.factor(comment_overview_V1$ma_sentiment)
+
+# Check head of dataframe
+comment_overview_V1 %>% head(10)
+```
+
+## Divide data intro train and test set
+
+```{r}
+# Split into 80/20 for training and test set
+set.seed(3456)
+trainIndex <- createDataPartition(comment_overview_V1$ma_sentiment, p = .8,
+                                  list = FALSE,
+                                  times = 1)
+training_set <- comment_overview_V1[trainIndex,]
+test_set <- comment_overview_V1[-trainIndex,]
+```
+
+```{r}
+# Write file to csv to use for python 
+index <- trainIndex[,1]
+
+nb_dataset <- comment_overview_V1 %>% 
+  mutate(training = case_when(
+    row_number() %in% index ~ TRUE,
+    TRUE ~ FALSE
+  ))
+
+nb_dataset %>% 
+  write_csv("./Data/nb_dataset.csv")
+```
+
+Let's have a look at the distribution of the sentiment categories for both training and test set
+
+```{r}
+training_set %>% 
+  group_by(ma_sentiment) %>% 
+  summarise(count = n()) %>% 
+  mutate(percentage = round(count/sum(count) * 100, 2))
+
+test_set %>% 
+  group_by(ma_sentiment) %>% 
+  summarise(count = n()) %>% 
+  mutate(percentage = round(count/sum(count) * 100, 2))
+```
+
+### Creating corpus and cleaning text
+```{r}
+# Creating corpus for train and test set
+train_corpus <- Corpus(VectorSource(training_set$comment_lemma))
+test_corpus <- Corpus(VectorSource(test_set$comment_lemma))
+
+# Cleaning corpus
+train_corpus_clean <- tm_map(train_corpus, tolower) %>% suppressWarnings()
+train_corpus_clean <- tm_map(train_corpus_clean, removeNumbers) %>% suppressWarnings()
+train_corpus_clean <- tm_map(train_corpus_clean, removePunctuation) %>% suppressWarnings()
+train_corpus_clean <- tm_map(train_corpus_clean, stripWhitespace) %>% suppressWarnings()
+
+test_corpus_clean <- tm_map(test_corpus, tolower) %>% suppressWarnings()
+test_corpus_clean <- tm_map(test_corpus_clean, removeNumbers) %>% suppressWarnings()
+test_corpus_clean <- tm_map(test_corpus_clean, removePunctuation) %>% suppressWarnings()
+test_corpus_clean <- tm_map(test_corpus_clean, stripWhitespace) %>% suppressWarnings()
+
+# Check if it worked
+inspect(train_corpus_clean[1:5])
+inspect(test_corpus_clean[1:5])
+```
+
+### Make a sparse matrix using DocumentTermMatrix
+```{r}
+# Sparse Matrix
+train_tf_idf <- DocumentTermMatrix(train_corpus_clean) %>% 
+  weightTfIdf(normalize = TRUE)
+test_tf_idf <- DocumentTermMatrix(test_corpus_clean) %>% 
+   weightTfIdf(normalize = TRUE)
+
+inspect(train_tf_idf)
+inspect(test_tf_idf)
+
+# Sparse Matrix
+train_dtm <- DocumentTermMatrix(train_corpus_clean)
+test_dtm <- DocumentTermMatrix(test_corpus_clean)
+
+inspect(train_dtm)
+inspect(test_dtm)
+```
+
+```{r}
+# Creating Indicator features for frequent words
+FreqWords <- findFreqTerms(train_dtm, 5)
+
+# Saving List using Dictionary() Function
+Dictionary <- function(x) {
+        if( is.character(x) ) {
+                return (x)
+        }
+        stop('x is not a character vector')
+}
+
+data_dict <- Dictionary(findFreqTerms(train_dtm, 5))
+
+# Appending Document Term Matrix to Train and Test Dataset 
+data_train <- DocumentTermMatrix(train_corpus_clean, list(data_dict))
+data_test <- DocumentTermMatrix(test_corpus_clean, list(data_dict))
+
+# Converting the frequency of word to count
+convert_counts <- function(x) {
+        x <- ifelse(x > 0, 1, 0)
+        x <- factor(x, levels = c(0, 1), labels = c("No", "Yes")) 
+        return(x)
+}
+
+# Appending count function to Train and Test Dataset
+data_train <- apply(data_train, MARGIN = 2, convert_counts)
+data_test <- apply(data_test, MARGIN = 2, convert_counts)
+```
+
+
+### Training a model
+```{r}
+nb_model <- naiveBayes(data_train, training_set$ma_sentiment)
+```
+
+
+### Model evaluation
+```{r}
+# Make predictions
+data_test_pred <- predict(nb_model, data_test)
+
+# Add predictions to datafile
+test_set$predicted <- data_test_pred
+test_set
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable <- table(test_set$ma_sentiment, test_set$predicted)
+names(dimnames(sentiment_scoretable)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable
+
+# Cross table with proportions
+prop.table(sentiment_scoretable) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable, 1) %>% 
+  round(2)
+```
+
+### Write predictions to file
+
+```{r}
+test_set %>% 
+  write_xlsx("./Data/Prediction files/6. Naive Bayes Prediction.xlsx")
+```
+
+### EXTRA ANALYSIS ####
+
+Same analysis but this time without the comments that were marked as twijfelgevallen
+```{r}
+# Read in data
+comments_ZT <- read_xlsx("./Data/Extra analyse/comment_overview_CLEAN_ZT.xlsx")
+
+## Divide data intro train and test set
+# Split into 80/20 for training and test set
+set.seed(3456)
+trainIndex_ZT <- createDataPartition(comments_ZT$ma_sentiment, p = .8,
+                                  list = FALSE,
+                                  times = 1)
+training_set_ZT <- comments_ZT[trainIndex_ZT,]
+test_set_ZT <- comments_ZT[-trainIndex_ZT,]
+
+index_ZT <- trainIndex_ZT[,1]
+
+### Creating corpus and cleaning text
+# Creating corpus for train and test set
+train_corpus_ZT <- Corpus(VectorSource(training_set_ZT$comment_lemma))
+test_corpus_ZT <- Corpus(VectorSource(test_set_ZT$comment_lemma))
+
+# Cleaning corpus
+train_corpus_clean_ZT <- tm_map(train_corpus_ZT, tolower) %>% suppressWarnings()
+train_corpus_clean_ZT <- tm_map(train_corpus_clean_ZT, removeNumbers) %>% suppressWarnings()
+train_corpus_clean_ZT <- tm_map(train_corpus_clean_ZT, removePunctuation) %>% suppressWarnings()
+train_corpus_clean_ZT <- tm_map(train_corpus_clean_ZT, stripWhitespace) %>% suppressWarnings()
+
+test_corpus_clean_ZT <- tm_map(test_corpus_ZT, tolower) %>% suppressWarnings()
+test_corpus_clean_ZT <- tm_map(test_corpus_clean_ZT, removeNumbers) %>% suppressWarnings()
+test_corpus_clean_ZT <- tm_map(test_corpus_clean_ZT, removePunctuation) %>% suppressWarnings()
+test_corpus_clean_ZT <- tm_map(test_corpus_clean_ZT, stripWhitespace) %>% suppressWarnings()
+
+### Make a sparse matrix using DocumentTermMatrix
+# Sparse Matrix
+train_tf_idf_ZT <- DocumentTermMatrix(train_corpus_clean_ZT) %>% 
+  weightTfIdf(normalize = TRUE)
+test_tf_idf_ZT <- DocumentTermMatrix(test_corpus_clean_ZT) %>% 
+   weightTfIdf(normalize = TRUE)
+
+# Sparse Matrix
+train_dtm_ZT <- DocumentTermMatrix(train_corpus_clean_ZT)
+test_dtm_ZT <- DocumentTermMatrix(test_corpus_clean_ZT)
+
+# Creating Indicator features for frequent words
+FreqWords_ZT <- findFreqTerms(train_dtm_ZT, 5)
+
+data_dict_ZT <- Dictionary(findFreqTerms(train_dtm_ZT, 5))
+
+# Appending Document Term Matrix to Train and Test Dataset 
+data_train_ZT<- DocumentTermMatrix(train_corpus_clean_ZT, list(data_dict_ZT))
+data_test_ZT <- DocumentTermMatrix(test_corpus_clean_ZT, list(data_dict_ZT))
+
+# Appending count function to Train and Test Dataset
+data_train_ZT <- apply(data_train_ZT, MARGIN = 2, convert_counts)
+data_test_ZT <- apply(data_test_ZT, MARGIN = 2, convert_counts)
+
+### Training a model
+nb_model_ZT <- naiveBayes(data_train_ZT, training_set_ZT$ma_sentiment)
+
+### Model evaluation
+# Make predictions
+data_test_pred_ZT <- predict(nb_model_ZT, data_test_ZT)
+
+# Add predictions to datafile
+test_set_ZT$predicted <- data_test_pred_ZT
+test_set_ZT
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable_ZT <- table(test_set_ZT$ma_sentiment, test_set_ZT$predicted)
+names(dimnames(sentiment_scoretable_ZT)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable_ZT
+
+# Cross table with proportions
+prop.table(sentiment_scoretable_ZT) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable_ZT, 1) %>% 
+  round(2)
+
+### Write predictions to file
+test_set_ZT %>% 
+  write_xlsx("./Data/Extra analyse/Prediction files/6. Naive Bayes Prediction_ZT.xlsx")
+```

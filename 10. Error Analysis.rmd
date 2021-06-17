@@ -1,0 +1,198 @@
+---
+title: "10. Error Analysis"
+author: "Shy-Ann Moehamatdjalil"
+date: "27-5-2021"
+output: html_document
+---
+
+
+# DEPENDS ON: Data/comment_overview_CLEAN.xlsx, Data/comments_tokenized.xlsx, Data/Prediction files/1.NRC Prediction.xlsx, Data/Prediction
+#             files/2.DANEW Prediction.xlsx, Data/Prediction files/3. Pattern Prediction.csv, Data/Prediction files/4. Polyglot Prediction.csv, 
+#             Data/Prediction files/5. Support Vector MachinePrediction.xlsx, Data/Prediction files/6. Naive Bayes Prediction.xlsx
+
+#             Data/NRC/NRC_Dutch.xlsx, Dictionaries/DANEW_Rescored.xlsx, Dictionaries/Pattern Wordlist.xlsx, Dictionaries/polyglot.csv
+
+
+# CREATES: Data/Error analyse/NRC Error.xlsx, Data/Error analyse/NRC missed words.xlsx, Data/Error analyse/DANEW Error.xlsx, Data/Error
+#          analyse/DANEW missed words.xlsx, Data/Error analyse/Pattern Error.xlsx, Data/Error analyse/Pattern missed words.xlsx, Data/Error
+#          analyse/Polyglot Error.xlsx, Data/Error analyse/Polyglot missed words.xlsx, Data/Error analyse/SVM Error.xlsx, Data/Error analyse/NB
+#          Error.xlsx
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+```
+
+### Load all the prediction files in 
+```{r message=FALSE, warning=FALSE}
+# Comments
+comments <- read_excel("./Data/comment_overview_CLEAN.xlsx", col_types = "text")
+comments_tokenized_ns <- read_excel("./Data/comments_tokenized.xlsx")
+
+# Prediction files
+NRC <- read_excel("./Data/Prediction files/1.NRC Prediction.xlsx")
+DANEW <- read_excel("./Data/Prediction files/2.DANEW Prediction.xlsx")
+Pattern <- read_csv("./Data/Prediction files/3. Pattern Prediction.csv")
+Polyglot <- read_csv("./Data/Prediction files/4. Polyglot Prediction.csv")
+SVM <- read_excel("./Data/Prediction files/5. Support Vector Machine Prediction.xlsx")
+NB <- read_excel("./Data/Prediction files/6. Naive Bayes Prediction.xlsx")
+```
+
+Look at the comments that have a lot of predicted in the opposite category. So why are comments that are negative, classified as positive? And why are comments that are positive classified as negative? These are the two most interesting ones to have a look at
+
+### NRC list
+
+```{r}
+NRC_error <- NRC %>% 
+  filter((ma_sentiment == "Negative" & sentiment_auto == "Positive") |
+          (ma_sentiment == "Positive" & sentiment_auto == "Negative"))
+
+NRC_error
+
+# Sample 50 and have a closer look in Excel 
+NRC_error %>% 
+  sample_n(50) %>% 
+  write_xlsx("./Data/Error analyse/NRC Error.xlsx")
+
+```
+
+Look at the words that were lost when joining the tokenized comments with the wordlist
+```{r}
+NRC_anti_join <- comments_tokenized_ns %>% 
+  anti_join(read_xlsx("./Data/NRC/NRC_Dutch.xlsx"), by = c(token = 'Dutch')) 
+
+NRC_missed <- distinct(NRC_anti_join, token)
+NRC_missed
+
+# Store list in Excel
+NRC_missed %>% 
+  write_xlsx("./Data/Error analyse/NRC missed words.xlsx")
+
+```
+
+### DANEW list
+
+```{r}
+DANEW_error <- DANEW %>% 
+  filter((ma_sentiment == "Negative" & sentiment_auto == "Positive") |
+          (ma_sentiment == "Positive" & sentiment_auto == "Negative"))
+
+# Sample 50 and have a closer look in Excel 
+DANEW_error %>% 
+  sample_n(50) %>% 
+  write_xlsx("./Data/Error analyse/DANEW Error.xlsx")
+```
+
+Look at the words that were lost when joining the tokenized comments with the wordlist
+```{r}
+DANEW_anti_join <- comments_tokenized_ns %>% 
+  anti_join(read_xlsx("./Dictionaries/DANEW_Rescored.xlsx"), by = c(token = 'Words')) 
+
+DANEW_missed <- distinct(DANEW_anti_join, token)
+DANEW_missed
+
+# Store list in Excel
+DANEW_missed %>% 
+  write_xlsx("./Data/Error analyse/DANEW missed words.xlsx")
+
+```
+
+
+### Pattern list
+
+```{r}
+Pattern_error <- Pattern %>% 
+  filter((ma_sentiment == "Negative" & sentiment_auto == "Positive") |
+          (ma_sentiment == "Positive" & sentiment_auto == "Negative"))
+
+Pattern_error
+
+# Sample 50 and have a closer look in Excel 
+Pattern_error %>% 
+  select(-X1, -comments_lower) %>% 
+  relocate(ma_sentiment, .after = sentiment_score) %>% 
+  mutate(sentiment_score = round(sentiment_score, 3)) %>% 
+  sample_n(50) %>% 
+  write_xlsx("./Data/Error analyse/Pattern Error.xlsx")
+```
+
+Look at the words that were lost when joining the tokenized comments with the wordlist
+```{r}
+pattern_anti_join <- comments_tokenized_ns %>% 
+  anti_join(read_xlsx("./Dictionaries/Pattern Wordlist.xlsx"), by = c(token = 'word')) 
+
+pattern_missed <- distinct(pattern_anti_join, token)
+pattern_missed
+
+# Store list in Excel
+pattern_missed %>% 
+  write_xlsx("./Data/Error analyse/Pattern missed words.xlsx")
+```
+
+### Polyglot list
+
+```{r}
+Polyglot_error <- Polyglot %>% 
+  filter((ma_sentiment == "Negative" & sentiment_auto == "Positive") |
+          (ma_sentiment == "Positive" & sentiment_auto == "Negative"))
+
+Polyglot_error
+
+# Sample 50 and have a closer look in Excel 
+Polyglot_error %>% 
+  select(-X1, -comments_lower) %>% 
+  relocate(ma_sentiment, .after = sentiment_score) %>% 
+  mutate(sentiment_score = round(sentiment_score, 3)) %>% 
+  sample_n(50) %>% 
+  write_xlsx("./Data/Error analyse/Polyglot Error.xlsx")
+```
+
+Look at the words that were lost when joining the tokenized comments with the wordlist
+```{r}
+polyglot_anti_join <- comments_tokenized_ns %>% 
+  anti_join(read_csv("./Dictionaries/polyglot.csv"), by = c(token = 'words')) 
+
+polyglot_missed <- distinct(polyglot_anti_join, token)
+polyglot_missed
+
+# Store list in Excel
+polyglot_missed %>% 
+  write_xlsx("./Data/Error analyse/Polyglot missed words.xlsx")
+```
+
+### SVM list
+
+```{r}
+SVM_error <- SVM %>% 
+  filter((ma_sentiment == "Negative" & predicted == "Positive") |
+          (ma_sentiment == "Positive" & predicted == "Negative"))
+
+SVM_error
+
+# Sample 50 and have a closer look in Excel 
+SVM_error %>% 
+  sample_n(50) %>% 
+  write_xlsx("./Data/Error analyse/SVM Error.xlsx")
+
+```
+
+### NB list
+
+```{r}
+NB_error <- NB %>% 
+  filter((ma_sentiment == "Negative" & predicted == "Positive") |
+          (ma_sentiment == "Positive" & predicted == "Negative"))
+
+NB_error
+
+# Only 32 and have a closer look in Excel 
+NB_error %>% 
+  write_xlsx("./Data/Error analyse/NB Error.xlsx")
+
+```
+
+

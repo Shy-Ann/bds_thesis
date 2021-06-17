@@ -1,0 +1,201 @@
+---
+title: "11. Combination of NRC & Polyglot"
+author: "Shy-Ann Moehamatdjalil"
+date: "10-6-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/comments_tokenized.xlsx, Data/NRC/NRC_Dutch.xlsx, Dictionaries/polyglot.csv
+
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+```
+
+## Load Data
+```{r message=FALSE, warning=FALSE}
+# Load in tokenized comments
+comments_tokenized_ns <- read_excel("./Data/comments_tokenized.xlsx")
+comments_tokenized_ns %>% head(20)
+
+# Load NRC& Polyglot dictionary
+NRC <- read_excel("./Data/NRC/NRC_Dutch.xlsx") %>% 
+  rename("words" = "Dutch") %>% 
+  mutate(Dictionary = "NRC")
+Polyglot <-  read_csv("./Dictionaries/polyglot.csv") %>% 
+  select(-X1) %>% 
+    mutate(Positive = case_when(
+    sentiment == "[-1]" ~ 0,
+    sentiment == "[1]" ~ 1,
+    TRUE ~ 0)) %>% 
+  mutate(Negative = case_when(
+    sentiment == "[-1]" ~ 1,
+    sentiment == "[1]" ~ 0,
+    TRUE ~ 0)) %>% 
+  select(-sentiment) %>% 
+  mutate(Dictionary = "Polyglot")
+
+# Combine the dictionaries
+dictionaries <- rbind(NRC, Polyglot) %>% 
+  arrange(words)
+
+# Filter out the duplicates and only keep the ones from the Polyglot library
+dubbel <- dictionaries %>% 
+  add_count(words) %>% 
+  filter(n > 1) %>%
+  arrange(words) %>% 
+  filter(Dictionary == "Polyglot") %>% 
+  select(-n)
+
+# Add those to the dictionary again
+dictionary <- dictionaries[!duplicated(dictionaries$words),] %>% 
+  rbind(dubbel) %>% 
+  arrange(words)
+```
+
+## Joining of comments and word list
+```{r}
+# Check how many comments before joining with word list
+unique(comments_tokenized_ns$sk_id) %>% length() #2616
+
+# Join the comments together with the NRC dictionary
+comments_labeled <- inner_join(comments_tokenized_ns, dictionary, by = c(token = 'words'))
+
+comments_labeled %>% head(20)
+
+# Check how many comments after joining with word list
+unique(comments_labeled$sk_id) %>% length() #2425, which means that 191 comments were excluded because they don't contain words any words that are in the dictionary. 
+```
+
+### Sentiment analysis (counting postive vs. negative words)
+
+```{r}
+# Compute sentiment scores
+comments_scores <- comments_labeled %>% 
+  group_by(sk_id) %>% 
+  mutate(Positive_Score = sum(Positive),
+         Negative_Score = sum(Negative)) %>%
+  mutate(sentiment_auto = case_when(
+    Positive_Score > Negative_Score ~ "Positive", # Positive if more positive than negative words
+    Negative_Score > Positive_Score ~ "Negative", # Negative if more negative than positive words
+    Positive_Score == Negative_Score ~ "Neutral", # Neutral is equal amount of positive and negative word
+    TRUE ~ "Neutral" # Neutral is no sentiment words
+  ))
+
+comments_scores %>% head(30)
+```
+
+## Compare manual with "automatic" analysis
+```{r}
+# Get the unique sentiment scores
+comments_sentiment_scores <- comments_scores[!duplicated(comments_scores$sk_id),] %>% 
+  select(- Positive, - Negative) %>% 
+  unique()
+
+comments_sentiment_scores %>% head()
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable <- table(comments_sentiment_scores$ma_sentiment, comments_sentiment_scores$sentiment_auto)
+names(dimnames(sentiment_scoretable)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable
+
+# Cross table with proportions
+prop.table(sentiment_scoretable) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable, 1) %>% 
+  round(2)
+```
+
+### Make tables
+Make functions for calculating accuracy, precision, recall and F-measure
+```{r}
+accuracy <- function(proportions){
+  acc = prop.table(proportions) %>% 
+    diag() %>% 
+    sum() %>% 
+    round(2)
+  return(acc)
+}
+
+precision <- function(table, class){
+   if (class == "Negative"){
+    TP <- table["Negative", "Negative"]
+    FP <- table["Neutral", "Negative"] + table["Positive", "Negative"]
+  } else if(class == "Neutral"){
+    TP <- table["Neutral", "Neutral"]
+    FP <- table["Negative", "Neutral"] + table["Positive", "Neutral"]
+  } else {
+    TP <- table["Positive", "Positive"]
+    FP <- table["Negative", "Positive"] + table["Neutral", "Positive"]
+  }
+  precision = TP/(TP + FP)
+  precision = round(precision, 2)
+  return(precision)
+}
+  
+recall <- function(table, class){
+  if (class == "Negative"){
+    TP <- table["Negative", "Negative"]
+    FN <- table["Negative", "Neutral"] + table["Negative", "Positive"]
+  } else if(class == "Neutral"){
+    TP <- table["Neutral", "Neutral"]
+    FN <- table["Neutral", "Negative"] + table["Neutral", "Positive"]
+  } else {
+    TP <- table["Positive", "Positive"]
+    FN <- table["Positive", "Negative"] + table["Positive", "Neutral"]
+  }
+  recall = TP/(TP + FN)
+  recall = round(recall, 2)
+  return(recall)
+}
+
+
+F1 <- function(precision, recall){
+  F1_score = 2 * (precision * recall)/(precision + recall)
+  F1_score = round(F1_score,2)
+  return(F1_score)
+}
+
+```
+
+```{r}
+# Calculate accuracy
+acc <- accuracy(sentiment_scoretable)
+
+# For Negative class calculate precision, recall, f1
+N_pre <- precision(sentiment_scoretable, "Neutral")
+N_rec <- recall(sentiment_scoretable, "Neutral")
+N_F1 <- F1(N_pre, N_rec)
+
+# For Neutral class calculate precision, recall, f1
+Neu_pre <- precision(sentiment_scoretable, "Neutral")
+Neu_rec <- recall(sentiment_scoretable, "Neutral")
+Neu_F1 <- F1(Neu_pre, Neu_rec)
+
+# For Positive class calculate precision, recall, f1
+P_pre <- precision(sentiment_scoretable, "Positive")
+P_rec <- recall(sentiment_scoretable, "Positive")
+P_F1 <- F1(P_pre, P_rec)
+
+# Calculate macro F1
+MAF1 <- mean(c(N_F1, Neu_F1, N_F1)) %>% round(2)
+
+values <- list("Acc" = acc, "MAF1" = MAF1,
+               "Neg_Precision" = N_pre, "Neg_Recall" = N_rec, "Neg_F1" = N_F1,
+               "Neu_Precision" = Neu_pre, "Neu_Recall" = Neu_rec, "Neu_F1" = Neu_F1,
+               "Pos_Precision" = P_pre, "Pos_Recall" = P_rec, "Pos_F1" = P_F1)
+values
+```
+
+
+
+

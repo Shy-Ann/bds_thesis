@@ -1,0 +1,200 @@
+---
+title: "3. DANEW"
+author: "Shy-Ann Moehamatdjalil"
+date: "17-5-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/comments_tokenized.xlsx, Dictionaries/DANEW.xlsx, Data/sk_id and comment only.xlsx, 
+#             Data/Extra analyse/comments_tokenized_ZT.xlsx
+
+# CREATES: Dictionaries/DANEW_Rescored.xlsx, Data/Prediction files/2.DANEW Prediction.xlsx, 
+#          Data/Extra analyse/Prediction files/2.DANEW Prediction_ZT.xlsx
+
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+```
+
+## Load Data
+```{r}
+# Load file with tokenized comments
+comments_tokenized_ns <- read_excel("./Data/comments_tokenized.xlsx")
+comments_tokenized_ns %>% head(20)
+
+# Load DANEW word list
+DANEW <- read_excel("./Dictionaries/DANEW.xlsx")
+DANEW %>% head()
+
+# Select only the words column and the means for the category all
+DANEW_All <- DANEW %>% 
+  select(Words, `M Valence All`)
+DANEW_All %>% head()
+```
+
+### Rescoring of sentiment words
+Words are measured on a 1 to 7 point Likert Scale but in order to compare it to the other measure, we need to rescore the values. 1 to 3,5 is seen as negative, 3.5 to 4.5 is seen as neutral and 5, 6 and 7 are seen as positive. 
+```{r}
+# Rescore the sentiment values
+DANEW_Rescored <- DANEW_All %>% 
+  mutate(`Positive` = case_when(
+    `M Valence All` >= 1 & `M Valence All` < 3.5 ~ 0, # Negative word
+    `M Valence All` >= 3.5 & `M Valence All` <= 4.5 ~ 0, # Neutral word
+    `M Valence All` > 4.5 & `M Valence All` <= 7 ~ 1)) %>% # Positive word
+  mutate(`Negative` = case_when(
+    `M Valence All` >= 1 & `M Valence All` < 3.5 ~ 1, # Negative word
+    `M Valence All` >= 3.5 & `M Valence All` <= 4.5 ~ 0, # Neutral word
+    `M Valence All` > 4.5 & `M Valence All` <= 7 ~ 0)) # Positive word
+
+DANEW_Rescored %>% head(20)
+
+# Write to file for later use
+DANEW_Rescored %>% 
+  write_xlsx("./Dictionaries/DANEW_Rescored.xlsx")
+```
+
+## Joining of comments and word list
+
+```{r}
+# Check how many comments before joining with word list
+unique(comments_tokenized_ns$sk_id) %>% length() #2616
+
+# Join the comments together with the NRC dictionary
+comments_labeled <- inner_join(comments_tokenized_ns, DANEW_Rescored, by = c(token = 'Words'))
+
+comments_labeled %>% head(20)
+
+# Check how many comments before joining with word list
+unique(comments_labeled$sk_id) %>% length() #2418, which means that 198 comments were excluded because they don't contain words any words that are in the dictionary. 
+```
+
+### Sentiment analysis (counting postive vs. negative words)
+
+```{r}
+# Compute sentiment scores
+comments_scores <- comments_labeled %>% 
+  group_by(sk_id) %>% 
+  mutate(Positive_Score = sum(Positive),
+         Negative_Score = sum(Negative)) %>%
+  mutate(sentiment_auto = case_when(
+    Positive_Score > Negative_Score ~ "Positive", # Positive if more positive than negative words
+    Negative_Score > Positive_Score ~ "Negative", # Negative if more negative than positive words
+    Positive_Score == Negative_Score ~ "Neutral", # Neutral is equal amount of positive and negative word
+    TRUE ~ "Neutral" # Neutral is no sentiment words
+  ))
+
+comments_scores %>% head(30)
+```
+
+## Compare manual with "automatic" analysis
+```{r}
+# Get the unique sentiment scores
+comments_sentiment_scores <- comments_scores[!duplicated(comments_scores$sk_id),] %>% 
+  select(- Positive, - Negative) %>% 
+  unique()
+
+comments_sentiment_scores %>% head()
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable <- table(comments_sentiment_scores$ma_sentiment, comments_sentiment_scores$sentiment_auto)
+names(dimnames(sentiment_scoretable)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable
+
+# Cross table with proportions
+prop.table(sentiment_scoretable) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable, 1) %>% 
+  round(2)
+```
+
+### Write predictions to file
+To do an error analysis to see what comments are missed, it is convenient if we concatenate the tokens that were used back to one sentence
+
+```{r}
+comments_scores %>% 
+  group_by(sk_id) %>% 
+  mutate(whole_comment = paste(token, collapse = " ")) %>% # Concatenate tokens
+  select(-Positive, - Negative, -token, - 'M Valence All') %>% # Delete columns that are not necessary anymore
+  relocate(ma_sentiment, .after = Negative_Score) %>% 
+  unique() %>% # Select only the unique ones
+  left_join(read_xlsx("./Data/sk_id and comment only.xlsx")) %>%  # Add the entire comments again to compare
+  write_xlsx("./Data/Prediction files/2.DANEW Prediction.xlsx")
+```
+
+### EXTRA ANALYSIS ####
+
+Same analysis but this time without the comments that were marked as debatable comments
+```{r}
+# Read in data
+comments_tokenized_ZT <- read_xlsx("./Data/Extra analyse/comments_tokenized_ZT.xlsx")
+
+## Joining of comments and word list
+# Check how many comments before joining with word list
+unique(comments_tokenized_ZT$sk_id) %>% length() #2363
+
+# Join the comments together with the NRC dictionary
+comments_labeled_ZT <- inner_join(comments_tokenized_ZT, DANEW_Rescored, by = c(token = 'Words'))
+
+comments_labeled_ZT %>% head(20)
+
+# Check how many comments before joining with word list
+unique(comments_labeled_ZT$sk_id) %>% length() #2186, which means that 177 comments were excluded because they don't contain words any words that are in the dictionary. 
+
+### Sentiment analysis (counting postive vs. negative words)
+# Compute sentiment scores
+comments_scores_ZT <- comments_labeled_ZT %>% 
+  group_by(sk_id) %>% 
+  mutate(Positive_Score = sum(Positive),
+         Negative_Score = sum(Negative)) %>%
+  mutate(sentiment_auto = case_when(
+    Positive_Score > Negative_Score ~ "Positive", # Positive if more positive than negative words
+    Negative_Score > Positive_Score ~ "Negative", # Negative if more negative than positive words
+    Positive_Score == Negative_Score ~ "Neutral", # Neutral is equal amount of positive and negative word
+    TRUE ~ "Neutral" # Neutral is no sentiment words
+  ))
+
+comments_scores_ZT %>% head(30)
+
+## Compare manual with "automatic" analysis
+# Get the unique sentiment scores
+comments_sentiment_scores_ZT <- comments_scores_ZT[!duplicated(comments_scores_ZT$sk_id),] %>% 
+  select(- Positive, - Negative) %>% 
+  unique()
+
+comments_sentiment_scores_ZT %>% head()
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable_ZT <- table(comments_sentiment_scores_ZT$ma_sentiment, comments_sentiment_scores_ZT$sentiment_auto)
+names(dimnames(sentiment_scoretable_ZT)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable_ZT
+
+# Cross table with proportions
+prop.table(sentiment_scoretable_ZT) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable_ZT, 1) %>% 
+  round(2)
+
+## Write to file 
+comments_scores_ZT %>% 
+  group_by(sk_id) %>% 
+  mutate(whole_comment = paste(token, collapse = " ")) %>% # Concatenate tokens
+  select(-Positive, - Negative, -token, - 'M Valence All') %>% # Delete columns that are not necessary anymore
+  relocate(ma_sentiment, .after = Negative_Score) %>% 
+  unique() %>% # Select only the unique ones
+  left_join(read_xlsx("./Data/sk_id and comment only.xlsx")) %>%  # Add the entire comments again to compare
+  write_xlsx("./Data/Extra analyse/Prediction files/2.DANEW Prediction_ZT.xlsx")
+```
+

@@ -1,0 +1,247 @@
+---
+title: "1. Data preparation"
+author: "Shy-Ann Moehamatdjalil"
+date: "4-5-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/comment_overview_V1.xlsx, Data/Data prep/Frog_lemmatized.csv, Data/Comments/Twijfelgevallen.xlsx
+
+# CREATES: Data/Data prep/Frog_data.csv, Data/comments_tokenized.xlsx, Data/comment_overview_CLEAN.xlsx, Data/sk_id and comment only.xlsx,
+#          Data/Extra analyse/comments_tokenized_ZT.xlsx, Data/Extra analyse/comment_overview_CLEAN_ZT.xlsx
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(hunspell)
+library(writexl)
+```
+
+## Load Data
+```{r message=FALSE}
+# Load in the data
+comment_overview_V1 <- read_excel("./Data/comment_overview_V1.xlsx", col_types = "text") %>% 
+  mutate(across(!c("user_name","comment","ma_sentiment",
+                   "replies","id"), as.numeric))
+
+# Replace NA for Incomprehensible
+comment_overview_V1$ma_sentiment <- str_replace(comment_overview_V1$ma_sentiment, "NA", "Incomprehensible")
+
+# Make ma_sentiment a factor variable
+comment_overview_V1$ma_sentiment <- as.factor(comment_overview_V1$ma_sentiment)
+  
+# Check head of dataframe
+comment_overview_V1 %>% head(10)
+
+# Check if there are any NA values
+comment_overview_V1[!complete.cases(comment_overview_V1),]
+```
+
+Only 1 incomplete case, it only misses the username which we don't care about anyways, so we'll leave it at that
+
+```{r}
+# Look at an overview of distribution of sentiment
+sentiment_table <- comment_overview_V1 %>% 
+  group_by(ma_sentiment) %>% 
+  summarise(count = n()) %>% 
+  mutate(percentage = round(count/sum(count) * 100, 2))
+
+sentiment_table
+
+sentiment_table %>% 
+  ggplot(aes(x = ma_sentiment, y = count)) +
+    geom_bar(stat = 'identity', position = 'dodge') +
+    labs(y = "Count", x = "Sentiment Categories", title = "Number of occurences per sentiment category") +
+    geom_label(aes(y = count, label = count))
+    
+
+# Bar plot over the different video's
+sentiment_pv_table <- comment_overview_V1 %>% 
+  group_by(id, ma_sentiment) %>%
+  summarise(count = n()) %>% 
+  add_tally(count, name = "n_video") %>% 
+  mutate(percentage_perVid = round(count/n_video * 100, 2))
+         
+sentiment_pv_table
+
+
+sentiment_pv_table %>%
+  ggplot(aes(fill = ma_sentiment, y = count, x = id)) +
+    geom_bar(position = 'dodge', stat = 'identity') +
+    coord_flip() +
+    labs(y = 'Count', x = 'Video ID', title = 'Numbers of sentiment categories per video',
+         fill = 'Sentiment Category') +
+    scale_fill_manual(values = c("Orange", "Red", "Blue", "Green")) +
+    geom_label(aes(y = count, label = count),
+             position = position_dodge(0.9))
+```
+
+### Noise Removal
+Removal of certain strings of text that are not of importance for sentiment analysis. Strings such as "4 months ago edited", "Show less" that were also scraped from the site. 
+
+```{r}
+# Noise put down in strings and with the replacement
+noise_strings <- c("\\d weeks ago edited " = "", "\\d months ago edited " = "", "\\d week ago edited " = "",
+                   "\\d month ago edited " = "","REPLY" = "", " Show less" = "", "^\\D+$" = "")
+
+# Remove the strings from the comments and save the new comments
+comment_overview_V1$clean_comments <- str_replace_all(comment_overview_V1$comment, noise_strings)
+
+# Check if it worked
+sum(str_detect(comment_overview_V1$clean_comments, c("\\d weeks ago edited | \\d months ago edited |
+                                                     \\d week ago edited |\\d month ago edited | REPLY 
+                                                     | Show less | ^\\D+$ ")))
+```
+
+Sum is zero so all the strings are removed from the text
+
+### Lemmatizing with Frog
+```{r}
+# Prepare CSV document with only sk_id and clean_comments
+comment_overview_V1 %>% 
+  select(sk_id, clean_comments) %>% 
+  write.csv2("./Data/Data prep/Frog_data.csv")
+
+# Frog is run on the server and with a python script and converted back to csv file
+# Import and combine the lemmatized comment with the whole dataframe
+frog_lemmatized <- read_csv("./Data/Data prep/Frog_lemmatized.csv") %>% 
+  select(sk_id, comment_lemma)
+
+# Check results
+frog_lemmatized %>% head()
+
+# Add lemmatized comment to dataframe
+comment_overview_V1 <- comment_overview_V1 %>% 
+  left_join(frog_lemmatized, by = "sk_id")
+
+comment_overview_V1 %>% head()
+
+```
+
+### Select the columns to use and tokenize
+```{r}
+# Create dataframe with just the comment and ID
+comments <- comment_overview_V1 %>% 
+  select(sk_id, id, comment_lemma, ma_sentiment) %>% 
+  filter(!ma_sentiment == "Incomprehensible") # Exclude sentences that are incomprehensible
+
+# Tokenize the comments and transform the words to lowercase
+comments_tokenized <- comments %>% 
+  unnest_tokens(token, comment_lemma, token = "words", to_lower = TRUE)
+
+# Check if it worked accordingly
+comments_tokenized[1:10,]
+
+# Get stopwords
+stopwords <- get_stopwords("nl")
+
+# Remove stopwords
+comments_tokenized_ns <- comments_tokenized %>% 
+  anti_join(stopwords, by = c(token = "word"))
+
+comments_tokenized_ns %>% head(20)
+
+# Write dataframe to Excel 
+comments_tokenized_ns %>% 
+  write_xlsx("./Data/comments_tokenized.xlsx")
+```
+
+### Word cloud
+```{r fig.height=800, fig.width=1280}
+library(RColorBrewer)
+# Make a fun wordcloud
+png("Wordcloud.png", width = 1280, height = 800)
+comments_tokenized_ns %>% 
+  count(token, sort = TRUE) %>% 
+  with(., wordcloud::wordcloud(token, n, max.words = 150, random.order = FALSE, scale = c(10, 1),
+                               rot.per = 0.20, colors = c("steelblue", "steelblue1", "steelblue2", "steelblue3",
+                                                          "steelblue4")))
+dev.off()
+```
+
+### Look at the distribution again after the cleaning
+
+One negative and one neutral comment were excluded due to the fact that they both only contained stopwords (sk_id: 1000096 and 1002011). 
+
+```{r}
+# Look at an overview of distribution of sentiment
+sentiment_table2 <- comments_tokenized_ns[!duplicated(comments_tokenized_ns$sk_id),] %>% # Only unique sk_id
+  group_by(ma_sentiment) %>% 
+  summarise(count = n()) %>% 
+  mutate(percentage = round(count/sum(count) * 100, 2))
+
+sentiment_table2
+
+sentiment_table2 %>% 
+  ggplot(aes(x = ma_sentiment, y = count)) +
+    geom_bar(stat = 'identity', position = 'dodge') +
+    labs(y = "Count", x = "Sentiment Categories", title = "Number of occurences per sentiment category") +
+    geom_label(aes(y = count, label = count))
+    
+
+# Bar plot over the different video's
+sentiment_pv_table2 <- comments_tokenized_ns[!duplicated(comments_tokenized_ns$sk_id),] %>% # Only unique sk_id
+  group_by(id, ma_sentiment) %>%
+  summarise(count = n()) %>% 
+  add_tally(count, name = "n_video") %>% 
+  mutate(percentage_perVid = round(count/n_video * 100, 2))
+         
+sentiment_pv_table2
+
+
+sentiment_pv_table2 %>%
+  ggplot(aes(fill = ma_sentiment, y = count, x = id)) +
+    geom_bar(position = 'dodge', stat = 'identity') +
+    coord_flip() +
+    labs(y = 'Count', x = 'Video ID', title = 'Numbers of sentiment categories per video',
+         fill = 'Sentiment Category') +
+    scale_fill_manual(values = c("Red", "Blue", "Green")) +
+    geom_label(aes(y = count, label = count),
+             position = position_dodge(0.9))
+```
+
+# Save as Excel for Python and machine learning later on 
+Save the comments file as excel, this is the dataframe that is cleaned up but without tokenization, stopword removal and lower casing (this can all be done in python aswell). It also already has the incomprehensible comments filtered out 
+```{r}
+comments %>% 
+  write_xlsx("./Data/comment_overview_CLEAN.xlsx")
+
+# File with only sk_id and the entire lemmatized comment
+comments %>%
+  select(sk_id, comment_lemma) %>% 
+  write_xlsx("./Data/sk_id and comment only.xlsx")
+  
+```
+
+
+### EXTRA ANALYSIS ####
+
+Same data preparation but this time without the comments that were marked as debatable comments
+```{r}
+# Load in datafile with id's of the twijfelgevallen
+comments_rand <- read_xlsx("./Data/Comments/Twijfelgevallen.xlsx")
+
+comments_tokenized_ZT <- comments_tokenized_ns %>% 
+  filter(!sk_id %in% comments_rand$sk_id)
+
+# Write to excel
+comments_tokenized_ZT %>% 
+  write_xlsx("./Data/Extra analyse/comments_tokenized_ZT.xlsx")
+```
+
+Also write file with the entire comments for python and machine learning. The index from the debatable comments can be used to filter for the correct comments
+```{r}
+# Datafile without the twijfelgevallen
+comments_ZT <- comments %>% 
+  filter(!sk_id %in% comments_rand$sk_id)
+
+comments_ZT %>% 
+  write_xlsx("./Data/Extra analyse/comment_overview_CLEAN_ZT.xlsx")
+```
+
+
+
+

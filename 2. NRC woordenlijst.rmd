@@ -1,0 +1,215 @@
+---
+title: "2. NRC woordenlijsten"
+author: "Shy-Ann Moehamatdjalil"
+date: "17-5-2021"
+output: html_document
+---
+
+# DEPENDS ON: Data/comments_tokenized.xlsx, Dictionaries/NRC-Emotion-Lexicon-v0.92-InManyLanguages.xlsx, Data/NRC/NRC ONTdubbelt.xlsx,
+#             Data/sk_id and comment only.xlsx, Data/Extra analyse/comments_tokenized_ZT.xlsx
+
+
+# CREATES: Data/NRC/NRC Dubbel.xlsx, Data/NRC/NRC_Dutch.xlsx, Data/Prediction files/1.NRC Prediction.xlsx, Data/Extra analyse/Prediction files/1.NRC Prediction_ZT.xlsx
+
+## Load packages
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(writexl)
+```
+
+## Load Data
+```{r}
+# Load in tokenized comments
+comments_tokenized_ns <- read_excel("./Data/comments_tokenized.xlsx")
+comments_tokenized_ns %>% head(20)
+
+# Load NRC dictionary
+NRC <- read_excel("./Dictionaries/NRC-Emotion-Lexicon-v0.92-InManyLanguages.xlsx") %>% 
+  as_tibble() %>% 
+  select(1,9,42:51) %>%  # Remove all other language translations 
+  rename("Dutch" = "Dutch Translation (Google Translate)")
+
+# Check if there are any NA values for the Dutch word
+any(is.na(NRC$Dutch)) # TRUE thus NA's for Dutch translation
+# Exclude the NA values for now
+NRC <- NRC[!(is.na(NRC$Dutch)),]
+
+### There are some English words with the same Dutch translation which we need to take out
+# Find the words that are double and write to excel
+
+NRC_Dubbel <- NRC %>% 
+  add_count(Dutch) %>% 
+  filter(n > 1) %>%
+  arrange(Dutch)
+
+NRC_Dubbel %>%  head()
+
+# Write to excel  
+NRC_Dubbel %>% write_xlsx("./Data/NRC/NRC Dubbel.xlsx")
+  
+# Load in the file without the double ones and replace these in the enitre file
+NRC_ontdubbelt <- read_excel("./Data/NRC/NRC ONTdubbelt.xlsx") # 917 rows
+
+NRC_V1 <- NRC %>% 
+  add_count(Dutch) %>% 
+  filter(n == 1) %>% # 5857 rows (also 7850 - 1993)
+  rbind(NRC_ontdubbelt) %>% 
+  arrange(Dutch)
+
+# Check number of rows to see if it went correct, should be 5857 + 917 = 6774
+NRC_V1 %>% nrow()
+  
+# Keep Dutch word and positive and negative score only
+NRC_Dutch <- NRC_V1 %>% 
+  select('Dutch', Positive, Negative)
+
+NRC_Dutch  
+
+# Write to file for later use
+NRC_Dutch %>% 
+  write_xlsx("./Data/NRC/NRC_Dutch.xlsx")
+```
+
+## Joining of comments and word list
+```{r}
+# Check how many comments before joining with word list
+unique(comments_tokenized_ns$sk_id) %>% length() #2618
+
+# Join the comments together with the NRC dictionary
+comments_labeled <- inner_join(comments_tokenized_ns, NRC_Dutch, by = c(token = 'Dutch'))
+
+comments_labeled %>% head(20)
+
+# Check how many comments after joining with word list
+unique(comments_labeled$sk_id) %>% length() #2332, which means that 286 comments were excluded because they don't contain words any words that are in the dictionary. 
+```
+
+### Sentiment analysis (counting postive vs. negative words)
+
+```{r}
+# Compute sentiment scores
+comments_scores <- comments_labeled %>% 
+  group_by(sk_id) %>% 
+  mutate(Positive_Score = sum(Positive),
+         Negative_Score = sum(Negative)) %>%
+  mutate(sentiment_auto = case_when(
+    Positive_Score > Negative_Score ~ "Positive", # Positive if more positive than negative words
+    Negative_Score > Positive_Score ~ "Negative", # Negative if more negative than positive words
+    Positive_Score == Negative_Score ~ "Neutral", # Neutral is equal amount of positive and negative word
+    TRUE ~ "Neutral" # Neutral is no sentiment words
+  ))
+
+comments_scores %>% head(30)
+```
+
+## Compare manual with "automatic" analysis
+```{r}
+# Get the unique sentiment scores
+comments_sentiment_scores <- comments_scores[!duplicated(comments_scores$sk_id),] %>% 
+  select(- Positive, - Negative) %>% 
+  unique()
+
+comments_sentiment_scores %>% head()
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable <- table(comments_sentiment_scores$ma_sentiment, comments_sentiment_scores$sentiment_auto)
+names(dimnames(sentiment_scoretable)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable
+
+# Cross table with proportions
+prop.table(sentiment_scoretable) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable, 1) %>% 
+  round(2)
+```
+
+### Write predictions to file
+
+To do an error analysis to see what comments are missed, it is convenient if we concatenate the tokens that were used back to one sentence
+
+```{r}
+comments_scores %>% 
+  group_by(sk_id) %>% 
+  mutate(whole_comment = paste(token, collapse = " ")) %>% # Concatenate tokens
+  select(-Positive, - Negative, -token) %>% # Delete columns that are not necessary anymore
+  relocate(ma_sentiment, .after = Negative_Score) %>% 
+  unique() %>% # Select only the unique ones
+  left_join(read_xlsx("./Data/sk_id and comment only.xlsx")) %>%  # Add the entire comments again to compare
+  write_xlsx("./Data/Prediction files/1.NRC Prediction.xlsx")
+```
+
+### EXTRA ANALYSIS ####
+
+Same analysis but this time without the comments that were marked as twijfelgevallen
+```{r}
+# Read in data
+comments_tokenized_ZT <- read_xlsx("./Data/Extra analyse/comments_tokenized_ZT.xlsx")
+
+## Joining of comments and word list
+# Check how many comments before joining with word list
+unique(comments_tokenized_ZT$sk_id) %>% length() #2363
+
+# Join the comments together with the NRC dictionary
+comments_labeled_ZT <- inner_join(comments_tokenized_ZT, NRC_Dutch, by = c(token = 'Dutch'))
+
+comments_labeled_ZT %>% head(20)
+
+# Check how many comments before joining with word list
+unique(comments_labeled_ZT$sk_id) %>% length() #2111, which means that 252 comments were excluded because they don't contain words any words that are in the dictionary. 
+
+### Sentiment analysis (counting postive vs. negative words)
+# Compute sentiment scores
+comments_scores_ZT <- comments_labeled_ZT %>% 
+  group_by(sk_id) %>% 
+  mutate(Positive_Score = sum(Positive),
+         Negative_Score = sum(Negative)) %>%
+  mutate(sentiment_auto = case_when(
+    Positive_Score > Negative_Score ~ "Positive", # Positive if more positive than negative words
+    Negative_Score > Positive_Score ~ "Negative", # Negative if more negative than positive words
+    Positive_Score == Negative_Score ~ "Neutral", # Neutral is equal amount of positive and negative word
+    TRUE ~ "Neutral" # Neutral is no sentiment words
+  ))
+
+comments_scores_ZT %>% head(30)
+
+## Compare manual with "automatic" analysis
+# Get the unique sentiment scores
+comments_sentiment_scores_ZT <- comments_scores_ZT[!duplicated(comments_scores_ZT$sk_id),] %>% 
+  select(- Positive, - Negative) %>% 
+  unique()
+
+comments_sentiment_scores_ZT %>% head()
+
+# Make a frequency table that compares manual and automated
+sentiment_scoretable_ZT <- table(comments_sentiment_scores_ZT$ma_sentiment, comments_sentiment_scores_ZT$sentiment_auto)
+names(dimnames(sentiment_scoretable_ZT)) <- c("MANUAL", "AUTOMATED")
+
+# Cross table with the different categories
+sentiment_scoretable_ZT
+
+# Cross table with proportions
+prop.table(sentiment_scoretable_ZT) %>% 
+  round(2)
+
+# Cross table with the different categories, in row percentages 
+prop.table(sentiment_scoretable_ZT, 1) %>% 
+  round(2)
+
+## Write to file 
+comments_scores_ZT %>% 
+  group_by(sk_id) %>% 
+  mutate(whole_comment = paste(token, collapse = " ")) %>% # Concatenate tokens
+  select(-Positive, - Negative, -token) %>% # Delete columns that are not necessary anymore
+  relocate(ma_sentiment, .after = Negative_Score) %>% 
+  unique() %>% # Select only the unique ones
+  left_join(read_xlsx("./Data/sk_id and comment only.xlsx")) %>%  # Add the entire comments again to compare
+  write_xlsx("./Data/Extra analyse/Prediction files/1.NRC Prediction_ZT.xlsx")
+
+```
